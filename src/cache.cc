@@ -928,7 +928,7 @@ if (writeback_cpu == NUM_CPUS)
                             uint64_t prior_full_addr = MSHR.entry[mshr_index].full_addr;
                             uint64_t prior_full_physical_address = MSHR.entry[mshr_index].full_physical_address;
 
-
+                            WQ.entry[index].cycle_enqueued = MSHR.entry[mshr_index].cycle_enqueued;
                             MSHR.entry[mshr_index] = WQ.entry[index];
 
 
@@ -2197,7 +2197,7 @@ if((cache_type == IS_L1I || cache_type == IS_L1D) && reads_ready.size() == 0)
                                 }
                                 else
                                     ++pf_late;//@v Late prefetch-> on-demand requests hit in MSHR
-
+                                RQ.entry[index].cycle_enqueued = MSHR.entry[mshr_index].cycle_enqueued;
                                 MSHR.entry[mshr_index] = RQ.entry[index];
 
                                 if(prior_fill_l1i && MSHR.entry[mshr_index].fill_l1i == 0)
