@@ -4,11 +4,36 @@
 #define IP_TRACKER_COUNT 64           // Number of IP trackers
 // ------------------------- DO NOT CHANGE -------------------------------- //
 
-#define PREFETCH_DEGREE 5             // Prefetch degree - you need to vary this!
+#define PREFETCH_DEGREE 10             // Prefetch degree - you need to vary this!
 
 class IP_TRACKER {
   public:
     // ------------------------- Define the IP_TRACKER class here ------------------------- //
+    uint64_t last_addr;
+    int64_t last_stride;
+    uint8_t confidence;
+
+    IP_TRACKER(): last_addr(0),last_stride(0),confidence(0){}
+
+    void update(uint64_t addr){
+        int64_t new_stride = addr - last_addr;
+        if (new_stride == last_stride) {
+            if (confidence < 2) confidence++;
+        }
+        else{
+            last_stride = new_stride;
+            confidence = 0;
+        }
+        last_addr = addr;
+    }
+
+    bool can_prefetch() const{
+        return confidence >= 2;
+    }
+
+    uint64_t get_next_addr() const{
+        return last_addr+last_stride;
+    }
 
 };
 
@@ -25,8 +50,18 @@ void CACHE::stlb_prefetcher_initialize()
 void CACHE::stlb_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit, uint8_t type, uint64_t prefetch_id, uint8_t instruction)
 {
     // ------------------------ Add Arbitrary Stride pf_address logic here ----------------------- // 
+    uint64_t tracker_index = ip % IP_TRACKER_COUNT;
+    IP_TRACKER &tracker = trackers[tracker_index];
 
-    // prefetch_translation(ip, pf_address, (int)2, 0, prefetch_id, instruction);
+    tracker.update(addr);
+
+    if (tracker.can_prefetch()){
+        for (int i=0; i<= PREFETCH_DEGREE-1;i++){
+            uint64_t pf_address = tracker.get_next_addr() + tracker.last_stride*(i);
+            prefetch_translation(ip, pf_address, (int)2, 0, prefetch_id, instruction);
+        }
+    }
+
     
     return;
 }
