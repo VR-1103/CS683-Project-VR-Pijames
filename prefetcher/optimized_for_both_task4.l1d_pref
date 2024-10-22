@@ -24,6 +24,8 @@ int pf_useful_cplx;
 int pf_issued_cplx;
 int pf_useful_nl;
 int pf_issued_nl;
+int pf_useful_l1d;
+int pf_issued_l1d;
 
 #define IP_STRIDE 1                   // IP-Stride Prefetcher
 #define CPLX 2                        // Complex-Stride Prefetcher
@@ -113,6 +115,24 @@ void CACHE::l1d_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit
 {
     uint64_t cl_addr = addr >> LOG2_BLOCK_SIZE;
     uint64_t page_addr = addr >> LOG2_PAGE_SIZE;
+
+    if (type == PREFETCH){
+        if (cache_hit == 1){
+            if (l1d_throttle < 10){
+                l1d_throttle++;
+            }
+        }
+        else{
+            if(l1d_throttle > 0){
+                l1d_throttle--;
+            }
+        }
+    }
+
+    if (l1d_throttle < stlb_throttle){
+        return;
+    }
+
 
     if (warmup_complete[0] == 1) {
         

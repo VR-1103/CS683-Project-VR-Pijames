@@ -50,6 +50,22 @@ void CACHE::stlb_prefetcher_initialize()
 void CACHE::stlb_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit, uint8_t type, uint64_t prefetch_id, uint8_t instruction)
 {
     // ------------------------ Add Arbitrary Stride pf_address logic here ----------------------- // 
+        if (type == PREFETCH){
+        if (cache_hit == 1){
+            if (stlb_throttle < 10){
+                stlb_throttle++;
+            }
+        }
+        else{
+            if(stlb_throttle > 0){
+                stlb_throttle--;
+            }
+        }
+    }
+
+    if (l1d_throttle > stlb_throttle){
+        return;
+    }
     uint64_t tracker_index = ip % IP_TRACKER_COUNT;
     IP_TRACKER &tracker = trackers1[tracker_index];
 
