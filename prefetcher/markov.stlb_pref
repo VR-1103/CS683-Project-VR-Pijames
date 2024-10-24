@@ -1,12 +1,16 @@
 #include "cache.h"
 
 // ------------------------- DO NOT CHANGE -------------------------------- //
-#define IP_TRACKER_COUNT 64           // Number of IP trackers
+#define IP_TRACKER_COUNT 256           // Number of IP trackers
 // ------------------------- DO NOT CHANGE -------------------------------- //
 
 #define PREFETCH_DEGREE 10             // Prefetch degree - you need to vary this!
 #define NUM_SLOTS 5
-#define PAGE_TAG(page_addr) ((page_addr) >> 6)
+#define PAGE_TAG(page_addr) ((page_addr) >> 8)
+uint64_t prev_page_addr = 0;
+uint64_t prev_index = 0;
+bool beginning = true;
+int global_index = 0;
 
 class IP_TRACKER {
   public:
@@ -16,6 +20,7 @@ class IP_TRACKER {
     bool valid;
     uint64_t access[NUM_SLOTS];
     bool slots_valid[NUM_SLOTS];
+    uint64_t last_used_time;
 
     IP_TRACKER(){
         page_tag = 0;
@@ -25,43 +30,50 @@ class IP_TRACKER {
             slots_valid[i] = false;
         }
         valid = false;
+        last_used_time = 0;
     }
 
-    bool update_tag(uint64_t page_addr){
+    bool update_tag(uint64_t page_addr, uint64_t current_time){
         if (page_tag != PAGE_TAG(page_addr) || valid == false){
             page_tag = PAGE_TAG(page_addr);
             valid = true;
+            last_used_time = current_time;
             for (int i=0;i<NUM_SLOTS;i++){
                 slots[i] = 0;
                 access[i] = 0;
+                slots_valid[i] = false;
             }
-            cout << "New entry" << endl;
+            // cout << "New entry" << endl;
             return false;
         }
-        cout << "Old entry" << endl;
+        // cout << "Old entry" << endl;
+        last_used_time = current_time;
         return true;
     }
 
     void update_slot(uint64_t page_addr){
+        bool found_slot = false;
         for(int i=0;i<NUM_SLOTS;i++){
-            if (!slots_valid){
+            if (!slots_valid[i]){
                 slots[i] = page_addr;
                 slots_valid[i] = true;
                 access[i] = 0;
+                found_slot = true;
                 break;
 
             }
-            else{
-                int lru_slot = 0;
-                for (int i=0;i<NUM_SLOTS;i++){
-                    if (access[lru_slot]>access[i]){
-                        lru_slot = i;
-                    }
+        }
+        if (!found_slot){
+            int lru_slot = 0;
+            for (int i=0;i<NUM_SLOTS;i++){
+                if (access[lru_slot]>access[i]){
+                    lru_slot = i;
                 }
-                slots[lru_slot] = page_addr;
-                slots_valid[lru_slot] = true;
-                access[lru_slot] = 0;
             }
+            slots[lru_slot] = page_addr;
+            slots_valid[lru_slot] = true;
+            access[lru_slot] = 0;
+        
         }
     }
 
@@ -76,14 +88,10 @@ class IP_TRACKER {
     }
 
     uint64_t get_addr(){
-        static int index = 0;
-        for(int i = index;i<NUM_SLOTS;i++){
+        for(int i = global_index;i<NUM_SLOTS;i++){
             if (slots_valid[i] == true){
                 access[i]++;
-                index = i+1;
-                if (index >= NUM_SLOTS){
-                    index = 0;
-                }
+                global_index = i+1;
                 return slots[i];
             }
         }
@@ -91,6 +99,8 @@ class IP_TRACKER {
 
 
 };
+
+uint64_t global_time = 0;
 
 IP_TRACKER markov_trackers[IP_TRACKER_COUNT];
 
@@ -104,19 +114,39 @@ void CACHE::stlb_prefetcher_initialize()
 
 }
 
+
+int find_tracker(uint64_t page_addr) {
+    int empty_index = -1;
+    int lru_index = 0;
+    uint64_t oldest_time = global_time;
+
+    for (int i = 0; i < IP_TRACKER_COUNT; i++) {
+        if (markov_trackers[i].valid && markov_trackers[i].page_tag == PAGE_TAG(page_addr)) {
+            return i;  // Tracker hit
+        }
+        if (!markov_trackers[i].valid && empty_index == -1) {
+            empty_index = i;  // Track the first empty slot
+        }
+        if (markov_trackers[i].last_used_time < oldest_time) {
+            lru_index = i;
+            oldest_time = markov_trackers[i].last_used_time;
+        }
+    }
+    // If no empty tracker is found, return the least recently used (LRU) tracker index
+    return (empty_index != -1) ? empty_index : lru_index;
+}
+
+
 // --------------- This is the main prefetcher operate function ---------------- // 
 void CACHE::stlb_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit, uint8_t type, uint64_t prefetch_id, uint8_t instruction)
 {
     // ------------------------ Add Arbitrary Stride pf_address logic here ----------------------- //
-    uint64_t prev_page_addr = 0;
-    uint64_t prev_index = 0;
-    bool beginning = true;
     if (cache_hit == 0){
         uint64_t page_addr = addr >> LOG2_PAGE_SIZE;
-        int tracker_index = page_addr % IP_TRACKER_COUNT;
-        cout << "Index = " << tracker_index << "; Page tag = " << PAGE_TAG(page_addr) << endl;
+        int tracker_index = find_tracker(page_addr);
+        // cout << "Index = " << tracker_index << "; Page tag = " << PAGE_TAG(page_addr) << "; Page = " << page_addr << endl;
         IP_TRACKER &tracker = markov_trackers[tracker_index];
-        bool hit = tracker.update_tag(page_addr);
+        bool hit = tracker.update_tag(page_addr,global_time++);
         if (!beginning){
             IP_TRACKER &prev_tracker = markov_trackers[prev_index];
             prev_tracker.update_slot(page_addr);
@@ -124,6 +154,7 @@ void CACHE::stlb_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hi
         }
         if (hit){
             int degree = tracker.find_degree();
+            global_index = 0;
             for(int i=0;i<degree;i++){
                 uint64_t pf_address = tracker.get_addr() << LOG2_PAGE_SIZE;
                 prefetch_translation(ip, pf_address, (int)2, 0, prefetch_id, instruction);
