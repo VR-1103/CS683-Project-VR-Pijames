@@ -1,0 +1,150 @@
+#include "cache.h"
+
+// ------------------------- DO NOT CHANGE -------------------------------- //
+#define IP_TRACKER_COUNT 64           // Number of IP trackers
+// ------------------------- DO NOT CHANGE -------------------------------- //
+
+#define PREFETCH_DEGREE 10             // Prefetch degree - you need to vary this!
+#define NUM_SLOTS 5
+#define PAGE_TAG(page_addr) ((page_addr) >> 6)
+
+class IP_TRACKER {
+  public:
+    // ------------------------- Define the IP_TRACKER class here ------------------------- //
+    uint64_t page_tag;
+    uint64_t slots[NUM_SLOTS];
+    bool valid;
+    uint64_t access[NUM_SLOTS];
+    bool slots_valid[NUM_SLOTS];
+
+    IP_TRACKER(){
+        page_tag = 0;
+        for (int i=0;i<NUM_SLOTS;i++){
+            slots[i] = 0;
+            access[i] = 0;
+            slots_valid[i] = false;
+        }
+        valid = false;
+    }
+
+    bool update_tag(uint64_t page_addr){
+        if (page_tag != PAGE_TAG(page_addr) || valid == false){
+            page_tag = PAGE_TAG(page_addr);
+            valid = true;
+            for (int i=0;i<NUM_SLOTS;i++){
+                slots[i] = 0;
+                access[i] = 0;
+            }
+            cout << "New entry" << endl;
+            return false;
+        }
+        cout << "Old entry" << endl;
+        return true;
+    }
+
+    void update_slot(uint64_t page_addr){
+        for(int i=0;i<NUM_SLOTS;i++){
+            if (!slots_valid){
+                slots[i] = page_addr;
+                slots_valid[i] = true;
+                access[i] = 0;
+                break;
+
+            }
+            else{
+                int lru_slot = 0;
+                for (int i=0;i<NUM_SLOTS;i++){
+                    if (access[lru_slot]>access[i]){
+                        lru_slot = i;
+                    }
+                }
+                slots[lru_slot] = page_addr;
+                slots_valid[lru_slot] = true;
+                access[lru_slot] = 0;
+            }
+        }
+    }
+
+    int find_degree(){
+        int degree = 0;
+        for(int i=0;i<NUM_SLOTS;i++){
+            if (slots_valid[i] == true){
+            degree++;
+            }
+        }
+        return degree;
+    }
+
+    uint64_t get_addr(){
+        static int index = 0;
+        for(int i = index;i<NUM_SLOTS;i++){
+            if (slots_valid[i] == true){
+                access[i]++;
+                index = i+1;
+                if (index >= NUM_SLOTS){
+                    index = 0;
+                }
+                return slots[i];
+            }
+        }
+    }
+
+
+};
+
+IP_TRACKER markov_trackers[IP_TRACKER_COUNT];
+
+// ------------------------- Initialize the prefetcher ------------------------- // 
+void CACHE::stlb_prefetcher_initialize() 
+{
+	cout << "CPU " << cpu << " STLB arbitrary stride prefetcher" << endl;
+    for (int i = 0; i < IP_TRACKER_COUNT; ++i) {
+        markov_trackers[i] = IP_TRACKER();
+    }
+
+}
+
+// --------------- This is the main prefetcher operate function ---------------- // 
+void CACHE::stlb_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit, uint8_t type, uint64_t prefetch_id, uint8_t instruction)
+{
+    // ------------------------ Add Arbitrary Stride pf_address logic here ----------------------- //
+    uint64_t prev_page_addr = 0;
+    uint64_t prev_index = 0;
+    bool beginning = true;
+    if (cache_hit == 0){
+        uint64_t page_addr = addr >> LOG2_PAGE_SIZE;
+        int tracker_index = page_addr % IP_TRACKER_COUNT;
+        cout << "Index = " << tracker_index << "; Page tag = " << PAGE_TAG(page_addr) << endl;
+        IP_TRACKER &tracker = markov_trackers[tracker_index];
+        bool hit = tracker.update_tag(page_addr);
+        if (!beginning){
+            IP_TRACKER &prev_tracker = markov_trackers[prev_index];
+            prev_tracker.update_slot(page_addr);
+
+        }
+        if (hit){
+            int degree = tracker.find_degree();
+            for(int i=0;i<degree;i++){
+                uint64_t pf_address = tracker.get_addr() << LOG2_PAGE_SIZE;
+                prefetch_translation(ip, pf_address, (int)2, 0, prefetch_id, instruction);
+            }
+        }
+        beginning = false;
+        prev_page_addr = page_addr;
+        prev_index = tracker_index;
+    }
+    return;
+}
+
+// ------------------------- DO NOT CHANGE -------------------------------- //
+void CACHE::stlb_prefetcher_cache_fill(uint64_t addr, uint32_t set, uint32_t way, uint8_t prefetch, uint64_t evicted_addr, uint32_t metadata_in)
+{
+    return;
+}
+
+void CACHE::stlb_prefetcher_final_stats()
+{
+    cout << "CPU " << cpu << " STLB arbitrary stride prefetcher final stats" << endl;
+	cout << "Degree: " << PREFETCH_DEGREE << endl;
+}
+// ------------------------- DO NOT CHANGE -------------------------------- //

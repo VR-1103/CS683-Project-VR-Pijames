@@ -1,0 +1,167 @@
+#include "cache.h"
+#include<stdbool.h>
+
+// ------------------------- DO NOT CHANGE -------------------------------- //
+#define RPT_ENTRY_COUNT 64           // Number of IP trackers
+// ------------------------- DO NOT CHANGE -------------------------------- //
+
+#define EXTRACT_PAGE_NUM(addr)   ((addr) >> LOG2_PAGE_SIZE)				// This gets us the page number
+#define IP_TAG(ip) ((ip) >> 6)											// Since there are 64 entries in the RPT
+
+#define PREFETCH_DEGREE 10             // Prefetch degree - you need to vary this!
+
+class RPT_ENTRY {
+	/*
+	This defines each row of the RPT. Thus each entry contains the PC, Stride and State bits. 
+	*/
+	public:
+		uint64_t ip_tag; 		// program counter
+		uint64_t addr;		// page of addr accessed by pc
+		int64_t stride;		// stride noticed (has to be signed)
+		uint64_t state;		// state (confidence) : Can only hold values 0, 1, 2
+		bool valid;		// to take care of garbage values
+};
+
+class RPT {
+	/*
+	According to the ISCA 2021 paper on "Agile TLB prefetching",
+	"On a TLB miss, ASP looks up the prediction table for
+	possible hits. On a table miss, the PC is stored in the first
+	field of the corresponding entry, the stride field is invalided,
+	and the counter of the state field is reset. On a table hit, ASP
+	updates the stride field using the current and previous missing
+	pages. If there is no change in the stride field, the counter
+	of the state field is increased; otherwise, it is reset. In case
+	of either table hit or miss, the current page is stored in the
+	second field of the entry. Finally, a prefetch takes place only
+	when the counter of the state field is greater than two."
+	*/
+	public:
+		RPT_ENTRY asp_trackers[RPT_ENTRY_COUNT];
+
+	// Initialise the table (have all entries as invalid and all states reset)
+	void initialiseTable(){
+		for (uint64_t i = 0; i < RPT_ENTRY_COUNT; i++){ 
+			asp_trackers[i].valid = false;
+			asp_trackers[i].state = 0; 				// Other values are allowed to be anything, this one has to be 0 at initialisation
+		}
+	}
+
+	void updateTable(uint64_t page_addr, uint64_t ip){
+	// Upon STLB Miss, we will first check if there is a valid entry in the RPT with the same ip and then update that. 
+	// Else, we will try to evict an entry to make space for this
+		uint64_t i = ip % RPT_ENTRY_COUNT;		// We will use a direcly mapped RPT
+
+		// Checking for table hit
+		// If we have a match for ip
+		if (asp_trackers[i].valid == true && asp_trackers[i].ip_tag == IP_TAG(ip)){ 
+			// cout << "I am!" << endl; 
+			if (( ( static_cast<int64_t>(page_addr) - static_cast<int64_t>(asp_trackers[i].addr) ) == asp_trackers[i].stride) && asp_trackers[i].state < 3){	// If the stride matches, improve confidence
+				asp_trackers[i].state++;
+			} 
+			else if (( static_cast<int64_t>(page_addr) - static_cast<int64_t>(asp_trackers[i].addr) ) != asp_trackers[i].stride){ 							// If there is stride mismatch, kill confidence
+				asp_trackers[i].stride = page_addr - asp_trackers[i].addr;		// Update stride
+				asp_trackers[i].state = 0;										// Reset confidence
+			}
+			// We don't care in the case where state == 3 and stride matches.
+
+			asp_trackers[i].addr = page_addr; 									// The new 'previous addr' is updated
+
+			// Repeating this assignment for no fucking reason
+			asp_trackers[i].valid = true;
+			asp_trackers[i].ip_tag = IP_TAG(ip);
+		}
+		
+		// If we had a table miss, we will need to create a new entry in that exact space
+		else{
+			// cout << "We created a new entry" << endl;
+			asp_trackers[i].valid = true;
+			asp_trackers[i].stride = 0; 	// Even though officially, we should invalidate the stride, nullifying it is simpler to implement and is better
+			asp_trackers[i].state = 0;		// No confidence for new entries
+			asp_trackers[i].ip_tag = IP_TAG(ip);
+			asp_trackers[i].addr = page_addr;
+		}
+	}
+
+	int64_t findStride(uint64_t ip){
+	// We return the correct stride if ip is present in table and has 2 confidence
+	// Else we return 0 in all other cases
+		uint64_t i = ip % RPT_ENTRY_COUNT; // Accessing the directly mapped entry
+		
+		if (asp_trackers[i].valid == true && asp_trackers[i].ip_tag == IP_TAG(ip)){ // Ideally this should always run since we ran updateTable before this
+			if (asp_trackers[i].state >= 2){
+				//cout << "For ip = "<< ip << ", we find a stride of " << asp_trackers[i].stride << endl;
+				return asp_trackers[i].stride;
+			}
+			else
+				return 0;
+		}
+		cout << "Why can't you???" << endl;
+		return 0; // Ideally we only call findStride after we call updateTable so I doubt this will ever be used.
+	}
+
+
+	void updatePrevAddr(uint64_t prefetched_addr, uint64_t ip){
+	// Update the RPT entry
+		uint64_t i = ip % RPT_ENTRY_COUNT; // Accessing the directly mapped entry
+		
+		if (asp_trackers[i].valid == true && asp_trackers[i].ip_tag == IP_TAG(ip)){
+			asp_trackers[i].addr = prefetched_addr;
+		}
+		else{
+			cout << "Ye kya hua??? Kaise huaaa??? Kyu huaaaa" << endl;
+		}
+	}
+};
+
+RPT asp_table;
+
+// ------------------------- Initialize the prefetcher ------------------------- // 
+void CACHE::stlb_prefetcher_initialize() 
+{
+	cout << "CPU " << cpu << " STLB arbitrary stride prefetcher" << endl;
+	asp_table.initialiseTable();
+
+	return;
+}
+
+// --------------- This is the main prefetcher operate function ---------------- // 
+void CACHE::stlb_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit, uint8_t type, uint64_t prefetch_id, uint8_t instruction)
+{
+	// We only invoke ASP when there is a page miss
+	if (cache_hit == 0){
+		//cout << "For ip = "<< ip << ", we got a TLB miss for page " << EXTRACT_PAGE_NUM(addr) << endl;
+		asp_table.updateTable(EXTRACT_PAGE_NUM(addr), ip);						// Make changes to the page table as deemed necessary
+		
+		// We now need to check if there is a case for prefetching to be made
+		int64_t stride = asp_table.findStride(ip);
+
+		if (stride != 0){  // Not that a stride of 0 with state 2 doesn't need to be prefetched.
+			// cout << "For ip = "<< ip << ", we send a prefetch request for ->" << endl; 
+			for (int64_t alpha = 1; alpha <= PREFETCH_DEGREE; alpha++ ){
+				int64_t pf_address = (static_cast<int64_t>(EXTRACT_PAGE_NUM(addr)) + alpha * stride) << LOG2_PAGE_SIZE;
+				// There is a chance pf_address might be -ve after the above operation. We cannot prefetch in that scenario
+				if (pf_address >= 0){
+					//cout << static_cast<uint64_t>(pf_address) << endl;
+					prefetch_translation(ip, static_cast<uint64_t>(pf_address), (int)2, 0, prefetch_id, instruction);
+					// We also need to update the ASP table to reflect the latest prefetched addr as the prev_addr for that entry
+					asp_table.updatePrevAddr(EXTRACT_PAGE_NUM(static_cast<uint64_t>(pf_address)), ip);
+				}
+			}
+		}
+	}
+    return;
+}
+
+// ------------------------- DO NOT CHANGE -------------------------------- //
+void CACHE::stlb_prefetcher_cache_fill(uint64_t addr, uint32_t set, uint32_t way, uint8_t prefetch, uint64_t evicted_addr, uint32_t metadata_in)
+{
+    return;
+}
+
+void CACHE::stlb_prefetcher_final_stats()
+{
+    cout << "CPU " << cpu << " STLB arbitrary stride prefetcher final stats" << endl;
+	cout << "Degree: " << PREFETCH_DEGREE << endl;
+}
+// ------------------------- DO NOT CHANGE -------------------------------- //

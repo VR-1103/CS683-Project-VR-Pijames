@@ -4,19 +4,38 @@
 #define IP_TRACKER_COUNT 64           // Number of IP trackers1
 // ------------------------- DO NOT CHANGE -------------------------------- //
 
-#define PREFETCH_DEGREE 5             // Prefetch degree - you need to vary this!
+#define PREFETCH_DEGREE 10             // Prefetch degree - you need to vary this!
+#define IP_TAG(ip) ((ip) >> 6)	
 
 class IP_TRACKER {
   public:
     // ------------------------- Define the IP_TRACKER class here ------------------------- //
-    uint64_t last_addr;
+    uint64_t ip_tag;
+    uint64_t last_pg_addr;
     int64_t last_stride;
     uint8_t confidence;
+    bool valid;
 
-    IP_TRACKER(): last_addr(0),last_stride(0),confidence(0){}
+    IP_TRACKER() {
+        ip_tag = 0;
+        last_pg_addr = 0;
+        last_stride = 0;
+        confidence = 0;
+        valid = false;
+    }
 
-    void update(uint64_t addr){
-        int64_t new_stride = addr - last_addr;
+    void update_ip(uint64_t new_ip,uint64_t page_addr){
+        if  (ip_tag != IP_TAG(new_ip) || valid == false){
+            ip_tag = IP_TAG(new_ip);
+            last_pg_addr = page_addr;
+            last_stride = 0;
+            confidence = 0;
+            valid = true;
+        } 
+    }
+
+    void update_confidence(uint64_t page_addr){
+        int64_t new_stride = page_addr - last_pg_addr;
         if (new_stride == last_stride) {
             if (confidence < 2) confidence++;
         }
@@ -24,15 +43,15 @@ class IP_TRACKER {
             last_stride = new_stride;
             confidence = 0;
         }
-        last_addr = addr;
+        last_pg_addr = page_addr;
+    }
+
+    void update_addr(uint64_t page_addr){
+        last_pg_addr = page_addr;
     }
 
     bool can_prefetch() const{
         return confidence >= 2;
-    }
-
-    uint64_t get_next_addr() const{
-        return last_addr+last_stride;
     }
 
 };
@@ -43,6 +62,10 @@ IP_TRACKER trackers1[IP_TRACKER_COUNT];
 void CACHE::stlb_prefetcher_initialize() 
 {
 	cout << "CPU " << cpu << " STLB arbitrary stride prefetcher" << endl;
+    // Initialize all IP_TRACKERS
+    for (int i = 0; i < IP_TRACKER_COUNT; ++i) {
+        trackers1[i] = IP_TRACKER();
+    }
 
 }
 
@@ -50,15 +73,22 @@ void CACHE::stlb_prefetcher_initialize()
 void CACHE::stlb_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit, uint8_t type, uint64_t prefetch_id, uint8_t instruction)
 {
     // ------------------------ Add Arbitrary Stride pf_address logic here ----------------------- // 
-    uint64_t tracker_index = ip % IP_TRACKER_COUNT;
-    IP_TRACKER &tracker = trackers1[tracker_index];
+    if (cache_hit == 0){
+        // cout << "Hello" << endl;
+        uint64_t page_addr = addr >> LOG2_PAGE_SIZE;
+        int tracker_index = ip % IP_TRACKER_COUNT;
+        // cout << "Tracker Index " << tracker_index << endl;
+        IP_TRACKER &tracker = trackers1[tracker_index];
+        tracker.update_ip(ip,page_addr);
+        tracker.update_confidence(page_addr);
 
-    tracker.update(addr);
-
-    if (tracker.can_prefetch()){
-        for (int i=0; i<= PREFETCH_DEGREE-1;i++){
-            uint64_t pf_address = tracker.get_next_addr() + tracker.last_stride*(i);
-            prefetch_translation(ip, pf_address, (int)2, 0, prefetch_id, instruction);
+        if (tracker.can_prefetch()){
+            // cout << "Can prefetch" << endl;
+            for (int i=0; i<= PREFETCH_DEGREE-1;i++){
+                uint64_t pf_address = (page_addr + tracker.last_stride*(i)) << LOG2_PAGE_SIZE;
+                prefetch_translation(ip, pf_address, (int)2, 0, prefetch_id, instruction);
+                tracker.update_addr(pf_address >> LOG2_PAGE_SIZE);
+            }
         }
     }
 
