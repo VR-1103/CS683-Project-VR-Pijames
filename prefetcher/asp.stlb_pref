@@ -4,7 +4,7 @@
 #define IP_TRACKER_COUNT 64           // Number of IP trackers1
 // ------------------------- DO NOT CHANGE -------------------------------- //
 
-#define PREFETCH_DEGREE 10             // Prefetch degree - you need to vary this!
+#define PREFETCH_DEGREE 15             // Prefetch degree - you need to vary this!
 #define IP_TAG(ip) ((ip) >> 6)	
 
 class IP_TRACKER {
