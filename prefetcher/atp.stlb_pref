@@ -64,7 +64,7 @@ class FPQ_MASP{
     void add_entry(uint64_t addr1, uint64_t addr2){
         // Shift all entries two position down, discarding the last entry
         for (int i = FPQ_COUNT - 3; i > 0; --i) {
-            fpq_entry[i] = fpq_entry[i + 2];
+            fpq_entry[i+2] = fpq_entry[i];
         }
 
         // Insert the two new entries at the beginning
@@ -104,7 +104,7 @@ class FPQ_STRIDE{
     void add_entry(uint64_t addr1, uint64_t addr2){
         // Shift all entries two position down, discarding the last entry
         for (int i = FPQ_COUNT - 3; i > 0; --i) {
-            fpq_entry[i] = fpq_entry[i + 2];
+            fpq_entry[i+2] = fpq_entry[i];
         }
 
         // Insert the two new entries at the beginning
@@ -144,7 +144,7 @@ class FPQ_H2{
     void add_entry(uint64_t addr1, uint64_t addr2){
         // Shift all entries two position down, discarding the last entry
         for (int i = FPQ_COUNT - 3; i > 0; --i) {
-            fpq_entry[i] = fpq_entry[i + 2];
+            fpq_entry[i+2] = fpq_entry[i];
         }
 
         // Insert the two new entries at the beginning
@@ -261,26 +261,27 @@ void CACHE::stlb_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hi
         }
         else{
             if (!masp_hit){
-                    if (!stride_hit){
-                        increase_c0(true); //basically means decrease
-                        increase_c1(true);
-                    }
-                    else{
-                        increase_c0(true);
-                        increase_c2(true);
-                    }
+                if (!stride_hit){
+                    increase_c0(true); //basically means decrease
+                    increase_c1(true);
+                    // cout << "Here" << endl;
                 }
                 else{
-                    if (!stride_hit){
-                        increase_c0(true);
-                        increase_c2(false);
-                    }
-                    else{
-                        increase_c0(true);
-                    }
+                    increase_c0(true);
+                    increase_c2(true);
                 }
+                }
+            else{
+                if (!stride_hit){
+                    increase_c0(true);
+                    increase_c2(false);
+                }
+                else{
+                    increase_c0(true);
+                }
+            }
         }
-
+        // cout << c0 << " " << c1 << " " << c2 << endl;
         //now to choose prefetcher
         if (c0 >= CONF){
             if (c1 >= CONF){
