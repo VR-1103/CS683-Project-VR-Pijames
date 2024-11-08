@@ -1,0 +1,50 @@
+#include "cache.h"
+
+// ------------------------- DO NOT CHANGE -------------------------------- //
+#define IP_TRACKER_COUNT 256           // Number of IP trackers
+// ------------------------- DO NOT CHANGE -------------------------------- //
+uint64_t last_addr = 0; //prev missed addr
+uint64_t last2_addr = 0; // last to last missed addr
+
+// ------------------------- Initialize the prefetcher ------------------------- // 
+void CACHE::stlb_prefetcher_initialize() 
+{
+	cout << "CPU " << cpu << " STLB arbitrary stride prefetcher" << endl;
+    for (int i = 0; i < IP_TRACKER_COUNT; ++i) {
+        markov_trackers[i] = IP_TRACKER();
+    }
+
+}
+
+
+// --------------- This is the main prefetcher operate function ---------------- // 
+void CACHE::stlb_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit, uint8_t type, uint64_t prefetch_id, uint8_t instruction)
+{
+    // ------------------------ Add Arbitrary Stride pf_address logic here ----------------------- //
+    if (cache_hit == 0){
+        uint64_t page_addr = addr >> LOG2_PAGE_SIZE;
+        uint64_t pf_address;
+        pf_address =  addr;
+        prefetch_translation(ip, pf_address, (int)2, 0, prefetch_id, instruction);
+        pf_address =  (page_addr + (page_addr - last_addr))<< LOG2_PAGE_SIZE;
+        prefetch_translation(ip, pf_address, (int)2, 0, prefetch_id, instruction);
+        pf_address =  (page_addr + (last_addr - last2_addr))<< LOG2_PAGE_SIZE;
+        prefetch_translation(ip, pf_address, (int)2, 0, prefetch_id, instruction);
+        last2_addr = last_addr;
+        last_addr = page_addr;
+    }
+    return;
+}
+
+// ------------------------- DO NOT CHANGE -------------------------------- //
+void CACHE::stlb_prefetcher_cache_fill(uint64_t addr, uint32_t set, uint32_t way, uint8_t prefetch, uint64_t evicted_addr, uint32_t metadata_in)
+{
+    return;
+}
+
+void CACHE::stlb_prefetcher_final_stats()
+{
+    cout << "CPU " << cpu << " STLB stride prefetcher final stats" << endl;
+	cout << "Degree: " << PREFETCH_DEGREE << endl;
+}
+// ------------------------- DO NOT CHANGE -------------------------------- //

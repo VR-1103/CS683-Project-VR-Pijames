@@ -43,10 +43,10 @@ class IP_TRACKER {
                 access[i] = 0;
                 slots_valid[i] = false;
             }
-            cout << "New entry" << endl;
+            // cout << "New entry" << endl;
             return false;
         }
-        cout << "Old entry" << endl;
+        // cout << "Old entry" << endl;
         last_used_time = current_time;
         return true;
     }
@@ -177,7 +177,7 @@ void CACHE::stlb_prefetcher_cache_fill(uint64_t addr, uint32_t set, uint32_t way
 
 void CACHE::stlb_prefetcher_final_stats()
 {
-    cout << "CPU " << cpu << " STLB arbitrary stride prefetcher final stats" << endl;
+    cout << "CPU " << cpu << " STLB markov prefetcher final stats" << endl;
 	cout << "Degree: " << PREFETCH_DEGREE << endl;
 }
 // ------------------------- DO NOT CHANGE -------------------------------- //

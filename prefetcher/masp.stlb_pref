@@ -1,0 +1,98 @@
+#include "cache.h"
+
+// ------------------------- DO NOT CHANGE -------------------------------- //
+#define IP_TRACKER_COUNT 64           // Number of IP trackers1
+// ------------------------- DO NOT CHANGE -------------------------------- //
+#define IP_TAG(ip) ((ip) >> 6)	
+
+class IP_TRACKER {
+  public:
+    // ------------------------- Define the IP_TRACKER class here ------------------------- //
+    uint64_t ip_tag;
+    uint64_t last_pg_addr;
+    int64_t last_stride;
+    uint8_t confidence;
+    bool valid;
+
+    IP_TRACKER() {
+        ip_tag = 0;
+        last_pg_addr = 0;
+        last_stride = 0;
+        valid = false;
+    }
+
+    bool update_ip(uint64_t new_ip,uint64_t page_addr){
+        if  (ip_tag != IP_TAG(new_ip) || valid == false){
+            ip_tag = IP_TAG(new_ip);
+            last_pg_addr = page_addr;
+            last_stride = 0;
+            valid = true;
+            return false;
+        } 
+        return true;
+    }
+
+    void update_data(uint64_t page_addr){
+        int64_t new_stride = page_addr - last_pg_addr;
+        last_pg_addr = page_addr;
+    }
+
+};
+
+IP_TRACKER trackers1[IP_TRACKER_COUNT];
+
+// ------------------------- Initialize the prefetcher ------------------------- // 
+void CACHE::stlb_prefetcher_initialize() 
+{
+	cout << "CPU " << cpu << " STLB arbitrary stride prefetcher" << endl;
+    // Initialize all IP_TRACKERS
+    for (int i = 0; i < IP_TRACKER_COUNT; ++i) {
+        trackers1[i] = IP_TRACKER();
+    }
+
+}
+
+// --------------- This is the main prefetcher operate function ---------------- // 
+void CACHE::stlb_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit, uint8_t type, uint64_t prefetch_id, uint8_t instruction)
+{
+    // ------------------------ Add Modified Arbitrary Stride pf_address logic here ----------------------- //
+    //Assume a TLB miss for
+    // virtual page A that hits in the prediction table of MASP, where
+    // the respective entry has in the second field the virtual page E
+    // and in the third field the stride +5. MASP will prefetch the
+    // PTEs of the pages A + 5 and A + d(A, E), where d(X, Y )
+    // computes the signed distance between pages X and Y . 
+    //So this means that I cant update stride before prefetching, I need to use previous stride? Does not seem correct, need to see.
+    if (cache_hit == 0){
+        // cout << "Hello" << endl;
+        uint64_t page_addr = addr >> LOG2_PAGE_SIZE;
+        int tracker_index = ip % IP_TRACKER_COUNT;
+        uint64_t pf_address;
+        IP_TRACKER &tracker = trackers1[tracker_index];
+        bool can_prefetch = tracker.update_ip(ip,page_addr); // it theres hit, returns true
+        // cout << "Can prefetch" << endl;
+        if (can_prefetch){
+            pf_address = (page_addr + tracker.last_stride) << LOG2_PAGE_SIZE;
+            prefetch_translation(ip, pf_address, (int)2, 0, prefetch_id, instruction);
+            pf_address = (page_addr + (page_addr - tracker.last_pg_addr)) << LOG2_PAGE_SIZE;
+            prefetch_translation(ip, pf_address, (int)2, 0, prefetch_id, instruction);
+        }
+        tracker.update_data(page_addr); //Updating the stride and page for next time
+    }
+
+    
+    return;
+}
+
+// ------------------------- DO NOT CHANGE -------------------------------- //
+void CACHE::stlb_prefetcher_cache_fill(uint64_t addr, uint32_t set, uint32_t way, uint8_t prefetch, uint64_t evicted_addr, uint32_t metadata_in)
+{
+    return;
+}
+
+void CACHE::stlb_prefetcher_final_stats()
+{
+    cout << "CPU " << cpu << " STLB modified arbitrary stride prefetcher final stats" << endl;
+	cout << "Degree: " << PREFETCH_DEGREE << endl;
+}
+// ------------------------- DO NOT CHANGE -------------------------------- //

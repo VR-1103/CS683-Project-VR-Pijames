@@ -1,0 +1,345 @@
+#include "cache.h"
+
+#define MASP_TRACKER_COUNT 64 //entries in masp ip table
+#define FPQ_COUNT 16 // keep track of last 16 prefetch pages
+#define IP_TAG(ip) ((ip) >> 6)
+uint64_t last_addr = 0; //prev missed addr
+uint64_t last2_addr = 0; // last to last missed addr
+int c0 = 0;
+int c1 = 0;
+int c2 = 0; //used for choosing prefetcher.
+int CONF_MAX = 64;
+int CONF_MIN = 0;
+int CONF = 32; //used to control when I will prefetch
+class MASP_TRACKER {
+  public:
+    // ------------------------- Define the IP_TRACKER class here ------------------------- //
+    uint64_t ip_tag;
+    uint64_t last_pg_addr;
+    int64_t last_stride;
+    uint8_t confidence;
+    bool valid;
+
+    MASP_TRACKER() {
+        ip_tag = 0;
+        last_pg_addr = 0;
+        last_stride = 0;
+        valid = false;
+    }
+
+    bool update_ip(uint64_t new_ip,uint64_t page_addr){
+        if  (ip_tag != IP_TAG(new_ip) || valid == false){
+            ip_tag = IP_TAG(new_ip);
+            last_pg_addr = page_addr;
+            last_stride = 0;
+            valid = true;
+            return false;
+        } 
+        return true;
+    }
+
+    void update_data(uint64_t page_addr){
+        int64_t new_stride = page_addr - last_pg_addr;
+        last_pg_addr = page_addr;
+    }
+
+};
+
+class FPQ_MASP_ENTRY{
+    public:
+        uint64_t page_addr;
+        bool valid;
+};
+
+class FPQ_MASP{
+    public:
+        FPQ_MASP_ENTRY fpq_entry[FPQ_COUNT];
+    
+    void initialiseTable(){
+        for (int i=0;i< FPQ_COUNT; ++i){
+            fpq_entry[i].valid = false;
+        }
+    }
+
+    void add_entry(uint64_t addr1, uint64_t addr2){
+        // Shift all entries two position down, discarding the last entry
+        for (int i = FPQ_COUNT - 3; i > 0; --i) {
+            fpq_entry[i] = fpq_entry[i + 2];
+        }
+
+        // Insert the two new entries at the beginning
+        fpq_entry[0].page_addr = addr1;
+        fpq_entry[0].valid = true;
+        
+        fpq_entry[1].page_addr = addr2;
+        fpq_entry[1].valid = true;
+    }
+
+    bool check_addr(uint64_t addr){
+        for (int i=0; i<FPQ_COUNT;i++){
+            if (fpq_entry[i].page_addr == addr && fpq_entry[i].valid){
+                return true;
+            }
+        }
+        return false;
+    }
+};
+
+class FPQ_STRIDE_ENTRY{
+    public:
+        uint64_t page_addr;
+        bool valid;
+};
+
+class FPQ_STRIDE{
+    public:
+        FPQ_STRIDE_ENTRY fpq_entry[FPQ_COUNT];
+    
+    void initialiseTable(){
+        for (int i=0;i< FPQ_COUNT; ++i){
+            fpq_entry[i].valid = false;
+        }
+    }
+
+    void add_entry(uint64_t addr1, uint64_t addr2){
+        // Shift all entries two position down, discarding the last entry
+        for (int i = FPQ_COUNT - 3; i > 0; --i) {
+            fpq_entry[i] = fpq_entry[i + 2];
+        }
+
+        // Insert the two new entries at the beginning
+        fpq_entry[0].page_addr = addr1;
+        fpq_entry[0].valid = true;
+        
+        fpq_entry[1].page_addr = addr2;
+        fpq_entry[1].valid = true;
+    }
+
+    bool check_addr(uint64_t addr){
+        for (int i=0; i<FPQ_COUNT;i++){
+            if (fpq_entry[i].page_addr == addr && fpq_entry[i].valid){
+                return true;
+            }
+        }
+        return false;
+    }
+};
+
+class FPQ_H2_ENTRY{
+    public:
+        uint64_t page_addr;
+        bool valid;
+};
+
+class FPQ_H2{
+    public:
+        FPQ_H2_ENTRY fpq_entry[FPQ_COUNT];
+    
+    void initialiseTable(){
+        for (int i=0;i< FPQ_COUNT; ++i){
+            fpq_entry[i].valid = false;
+        }
+    }
+
+    void add_entry(uint64_t addr1, uint64_t addr2){
+        // Shift all entries two position down, discarding the last entry
+        for (int i = FPQ_COUNT - 3; i > 0; --i) {
+            fpq_entry[i] = fpq_entry[i + 2];
+        }
+
+        // Insert the two new entries at the beginning
+        fpq_entry[0].page_addr = addr1;
+        fpq_entry[0].valid = true;
+        
+        fpq_entry[1].page_addr = addr2;
+        fpq_entry[1].valid = true;
+    }
+
+    bool check_addr(uint64_t addr){
+        for (int i=0; i<FPQ_COUNT;i++){
+            if (fpq_entry[i].page_addr == addr && fpq_entry[i].valid){
+                return true;
+            }
+        }
+        return false;
+    }
+};
+
+void increase_c0(bool increase){
+    if (increase){
+        if (c0 < CONF_MAX){
+            c0++;
+        }
+    }
+    else{
+        if (c0 > CONF_MIN){
+            c0--;
+        }
+    }
+}
+void increase_c1(bool increase){
+    if (increase){
+        if (c1 < CONF_MAX){
+            c1++;
+        }
+    }
+    else{
+        if (c1 > CONF_MIN){
+            c1--;
+        }
+    }
+}
+void increase_c2(bool increase){
+    if (increase){
+        if (c2 < CONF_MAX){
+            c2++;
+        }
+    }
+    else{
+        if (c2 > CONF_MIN){
+            c2--;
+        }
+    }
+}
+
+
+MASP_TRACKER masp_trackers[MASP_TRACKER_COUNT];
+FPQ_MASP masp_fpq;
+FPQ_STRIDE stride_fpq;
+FPQ_H2 h2_fpq;
+
+// ------------------------- Initialize the prefetcher ------------------------- // 
+void CACHE::stlb_prefetcher_initialize() 
+{
+	cout << "CPU " << cpu << " ATP arbitrary stride prefetcher" << endl;
+    // Initialize all IP_TRACKERS
+    for (int i = 0; i < MASP_TRACKER_COUNT; ++i) {
+        masp_trackers[i] = MASP_TRACKER();
+    }
+    masp_fpq.initialiseTable();
+    stride_fpq.initialiseTable();
+    h2_fpq.initialiseTable();
+
+}
+
+// --------------- This is the main prefetcher operate function ---------------- // 
+void CACHE::stlb_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit, uint8_t type, uint64_t prefetch_id, uint8_t instruction)
+{
+    if (cache_hit == 0){
+        uint64_t page_addr = addr >> LOG2_PAGE_SIZE;
+        int tracker_index = ip % MASP_TRACKER_COUNT; //for masp_tracker table, if we need to use it
+        MASP_TRACKER &tracker = masp_trackers[tracker_index]; //just in case
+        bool can_prefetch = tracker.update_ip(ip,page_addr); // it theres hit, returns true for masp, else makes sure masp is independantly keeping itself up to date
+        uint64_t pf_address,addr1,addr2;
+        bool masp_hit,stride_hit,h2_hit; //to track if respective fpqs have the addr
+        masp_hit = masp_fpq.check_addr(page_addr);
+        stride_hit = stride_fpq.check_addr(page_addr);
+        h2_hit = h2_fpq.check_addr(page_addr);
+        //hardcoding how c0,c1,c2 update
+        if (!h2_hit){
+            if (!masp_hit){
+                if (!stride_hit){
+                    increase_c0(false); //basically means decrease
+                }
+                else{
+                    increase_c0(true);
+                    increase_c1(false);
+                    increase_c2(true);
+                }
+            }
+            else{
+                if (!stride_hit){
+                    increase_c0(true);
+                    increase_c1(false);
+                    increase_c2(false);
+                }
+                else{
+                    increase_c0(true);
+                    increase_c1(false);
+                }
+            }
+        }
+        else{
+            if (!masp_hit){
+                    if (!stride_hit){
+                        increase_c0(true); //basically means decrease
+                        increase_c1(true);
+                    }
+                    else{
+                        increase_c0(true);
+                        increase_c2(true);
+                    }
+                }
+                else{
+                    if (!stride_hit){
+                        increase_c0(true);
+                        increase_c2(false);
+                    }
+                    else{
+                        increase_c0(true);
+                    }
+                }
+        }
+
+        //now to choose prefetcher
+        if (c0 >= CONF){
+            if (c1 >= CONF){
+                //use h2 pref
+                addr1 = (page_addr + (page_addr - last_addr));
+                addr2 = (page_addr + (last_addr - last2_addr));
+                
+                pf_address = addr1 << LOG2_PAGE_SIZE;
+                prefetch_translation(ip, pf_address, (int)2, 0, prefetch_id, instruction);
+                pf_address = addr2 << LOG2_PAGE_SIZE;
+                prefetch_translation(ip, pf_address, (int)2, 0, prefetch_id, instruction);
+            }
+            else{
+                if (c2 >= CONF){
+                    //use stride pref
+                    addr1 = page_addr + 1;
+                    addr2 = page_addr + 2;
+
+                    pf_address = addr1 << LOG2_PAGE_SIZE;
+                    prefetch_translation(ip, pf_address, (int)2, 0, prefetch_id, instruction);
+                    pf_address = addr2 << LOG2_PAGE_SIZE;
+                    prefetch_translation(ip, pf_address, (int)2, 0, prefetch_id, instruction);
+                }
+                else{
+                    //use masp pref
+                    if (can_prefetch){
+                        pf_address = (page_addr + tracker.last_stride) << LOG2_PAGE_SIZE;
+                        prefetch_translation(ip, pf_address, (int)2, 0, prefetch_id, instruction);
+                        pf_address = (page_addr + (page_addr - tracker.last_pg_addr)) << LOG2_PAGE_SIZE;
+                        prefetch_translation(ip, pf_address, (int)2, 0, prefetch_id, instruction);
+                    }
+                }
+            }
+        }
+        
+        //now update all fpqs
+        if (can_prefetch){
+            masp_fpq.add_entry((page_addr + tracker.last_stride),(page_addr + (page_addr - tracker.last_pg_addr)));
+        }
+        stride_fpq.add_entry(page_addr + 1,page_addr + 2);
+        h2_fpq.add_entry((page_addr + (page_addr - last_addr)),(page_addr + (last_addr - last2_addr)));
+        
+        //update other data of prefetchers to operate independantly
+        last2_addr = last_addr;
+        last_addr = page_addr; // these 2 required for h2_pref to operate properly
+        tracker.update_data(page_addr); //Updating the stride and page for next time for masp
+
+    }
+    return;
+}
+
+// ------------------------- DO NOT CHANGE -------------------------------- //
+void CACHE::stlb_prefetcher_cache_fill(uint64_t addr, uint32_t set, uint32_t way, uint8_t prefetch, uint64_t evicted_addr, uint32_t metadata_in)
+{
+    return;
+}
+
+void CACHE::stlb_prefetcher_final_stats()
+{
+    cout << "CPU " << cpu << " STLB ATP prefetcher final stats" << endl;
+}
+// ------------------------- DO NOT CHANGE -------------------------------- //

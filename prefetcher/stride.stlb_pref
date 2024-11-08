@@ -1,0 +1,56 @@
+#include "cache.h"
+
+// ------------------------- DO NOT CHANGE -------------------------------- //
+#define IP_TRACKER_COUNT 256           // Number of IP trackers
+// ------------------------- DO NOT CHANGE -------------------------------- //
+
+void get_page_range(uint64_t page_addr, uint64_t range[5]) {
+    range[0] = page_addr - 2;
+    range[1] = page_addr - 1;
+    range[2] = page_addr;
+    range[3] = page_addr + 1;
+    range[4] = page_addr + 2;
+}
+
+// ------------------------- Initialize the prefetcher ------------------------- // 
+void CACHE::stlb_prefetcher_initialize() 
+{
+	cout << "CPU " << cpu << " STLB arbitrary stride prefetcher" << endl;
+    for (int i = 0; i < IP_TRACKER_COUNT; ++i) {
+        markov_trackers[i] = IP_TRACKER();
+    }
+
+}
+
+
+// --------------- This is the main prefetcher operate function ---------------- // 
+void CACHE::stlb_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit, uint8_t type, uint64_t prefetch_id, uint8_t instruction)
+{
+    // ------------------------ Add Arbitrary Stride pf_address logic here ----------------------- //
+    if (cache_hit == 0){
+        uint64_t page_addr = addr >> LOG2_PAGE_SIZE;
+        // Declare a plain array
+        uint64_t range[5];
+        // Call the function to fill the range array
+        get_page_range(page_addr, range);
+        uint64_t pf_address;
+        for(int i=0;i<5;i++){
+            pf_address = range[i] << LOG2_PAGE_SIZE;
+            prefetch_translation(ip, pf_address, (int)2, 0, prefetch_id, instruction);
+        }
+    }
+    return;
+}
+
+// ------------------------- DO NOT CHANGE -------------------------------- //
+void CACHE::stlb_prefetcher_cache_fill(uint64_t addr, uint32_t set, uint32_t way, uint8_t prefetch, uint64_t evicted_addr, uint32_t metadata_in)
+{
+    return;
+}
+
+void CACHE::stlb_prefetcher_final_stats()
+{
+    cout << "CPU " << cpu << " STLB stride prefetcher final stats" << endl;
+	cout << "Degree: " << PREFETCH_DEGREE << endl;
+}
+// ------------------------- DO NOT CHANGE -------------------------------- //
